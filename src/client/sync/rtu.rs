@@ -5,7 +5,7 @@ use std::{io, time::Duration};
 
 use super::{Context, block_on_with_timeout};
 
-use tokio_serial::{SerialPortBuilder, SerialStream};
+use tokio_serial::SerialPortBuilder;
 
 use crate::Slave;
 
@@ -40,8 +40,9 @@ pub fn connect_slave_with_timeout(
         .enable_time()
         .build()?;
     // SerialStream::open requires a runtime at least on cfg(unix).
-    let serial = block_on_with_timeout(&runtime, timeout, async { SerialStream::open(builder) })?;
-    let async_ctx = crate::client::rtu::attach_slave(serial, slave);
+    let async_ctx = block_on_with_timeout(&runtime, timeout, async {
+        crate::client::rtu::connect_slave(builder, slave)
+    })?;
     let sync_ctx = Context {
         runtime,
         async_ctx,

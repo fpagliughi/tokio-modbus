@@ -49,9 +49,7 @@ async fn server_context(builder: &SerialPortBuilder) -> anyhow::Result<()> {
 async fn client_context(builder: &SerialPortBuilder) {
     // Give the server some time for starting up
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let client_serial = tokio_serial::SerialStream::open(builder).unwrap();
-
-    let ctx = client::rtu::attach(client_serial);
+    let ctx = client::rtu::connect(builder).unwrap();
 
     check_client_context(ctx).await;
 }

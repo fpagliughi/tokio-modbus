@@ -43,7 +43,8 @@ impl tokio_modbus::server::Service for Service {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let slave = Slave(12);
-    let builder = tokio_serial::new("/dev/ttyS10", 19200);
+    let baud_rate = 19200;
+    let builder = tokio_serial::new("/dev/ttyS10", baud_rate);
     let server_serial = tokio_serial::SerialStream::open(&builder).unwrap();
 
     println!("Starting up server...");
@@ -62,8 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     thread::sleep(Duration::from_secs(1));
 
     println!("CLIENT: Connecting client...");
-    let client_serial = tokio_serial::SerialStream::open(&builder).unwrap();
-    let mut ctx = rtu::attach_slave(client_serial, slave);
+    let mut ctx = rtu::connect_slave(&builder, slave).unwrap();
     println!("CLIENT: Reading input registers...");
     let rsp = ctx.read_input_registers(0x00, 7).await?;
     println!("CLIENT: The result is '{rsp:#x?}'");

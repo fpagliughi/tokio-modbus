@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2017-2026 slowtec GmbH <post@slowtec.de>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use std::io;
+use std::{io, time::Duration};
 
 use byteorder::{LittleEndian, ReadBytesExt as _};
 use smallvec::SmallVec;
@@ -14,6 +14,25 @@ use crate::{
 };
 
 use super::{RequestPdu, encode_request_pdu, request_pdu_size};
+
+/// Default inter-frame delay if the baud rate can't be determined.
+pub(crate) const DEFAULT_INTER_FRAME_DELAY: Duration = inter_frame_delay(9600);
+
+/// Calculate the Modbus RTU inter-frame delay (t3.5) for a given baud rate.
+///
+/// Per the Modbus over Serial Line specification:
+/// - For baud rates <= 19200: t3.5 = 3.5 characters × 11 bits/character / `baud_rate`
+/// - For baud rates > 19200: fixed at 1750 µs (1.75 ms)
+#[must_use]
+pub(crate) const fn inter_frame_delay(baud_rate: u32) -> Duration {
+    if baud_rate <= 19_200 {
+        // 3.5 chars × 11 bits/char = 38.5 bits
+        // Duration in microseconds = 38_500_000 / baud_rate
+        Duration::from_micros((38_500_000 / baud_rate) as u64)
+    } else {
+        Duration::from_micros(1750)
+    }
+}
 
 const MODBUS_CRC: crc::Crc<u16> = crc::Crc::<u16>::new(&crc::CRC_16_MODBUS);
 
@@ -419,6 +438,24 @@ impl Encoder<ResponseAdu> for ServerCodec {
 mod tests {
     use super::*;
     use crate::bytes::Bytes;
+
+    #[test]
+    fn test_inter_frame_delay() {
+        // At 9600 baud: 3.5 * 11 / 9600 = 0.004010... s ≈ 4010 µs
+        let delay = inter_frame_delay(9600);
+        assert_eq!(delay, Duration::from_micros(4010));
+
+        // At 19200 baud: 3.5 * 11 / 19200 = 0.002005... s ≈ 2005 µs
+        let delay = inter_frame_delay(19200);
+        assert_eq!(delay, Duration::from_micros(2005));
+
+        // Above 19200 baud: fixed 1750 µs
+        let delay = inter_frame_delay(38400);
+        assert_eq!(delay, Duration::from_micros(1750));
+
+        let delay = inter_frame_delay(115_200);
+        assert_eq!(delay, Duration::from_micros(1750));
+    }
 
     #[test]
     fn test_calc_crc() {
