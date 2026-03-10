@@ -1,10 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2017-2026 slowtec GmbH <post@slowtec.de>
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use std::io;
+use std::{io, time::Duration};
 
 use futures_util::{SinkExt as _, StreamExt as _};
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    time::Instant,
+};
 use tokio_util::codec::Framed;
 
 use crate::{
@@ -20,18 +23,22 @@ use super::{disconnect, verify_response_header};
 pub(crate) struct Client<T> {
     framed: Option<Framed<T, codec::rtu::ClientCodec>>,
     slave_id: SlaveId,
+    inter_frame_delay: Duration,
+    last_activity: Option<Instant>,
 }
 
 impl<T> Client<T>
 where
     T: AsyncRead + AsyncWrite + Unpin,
 {
-    pub(crate) fn new(transport: T, slave: Slave) -> Self {
+    pub(crate) fn new(transport: T, slave: Slave, inter_frame_delay: Duration) -> Self {
         let framed = Framed::new(transport, codec::rtu::ClientCodec::default());
         let slave_id = slave.into();
         Self {
             slave_id,
             framed: Some(framed),
+            inter_frame_delay,
+            last_activity: None,
         }
     }
 
@@ -59,20 +66,29 @@ where
         let req_adu = self.next_request_adu(req);
         let req_hdr = req_adu.hdr;
 
-        let framed = self.framed()?;
-
-        framed.read_buffer_mut().clear();
-        framed.send(req_adu).await?;
+        // Enforce t3.5 inter-frame silence before sending
+        if let Some(last) = self.last_activity {
+            let elapsed = last.elapsed();
+            if elapsed < self.inter_frame_delay {
+                tokio::time::sleep(self.inter_frame_delay.saturating_sub(elapsed)).await;
+            }
+        }
 
         // Broadcast requests (slave ID 0) do not receive a response.
         if Slave::from(req_hdr.slave_id).is_broadcast() {
             return Ok(Ok(None));
         }
 
+        let framed = self.framed()?;
+        framed.read_buffer_mut().clear();
+        framed.send(req_adu).await?;
+        self.last_activity = Some(Instant::now());
+
         let res_adu = framed
             .next()
             .await
             .unwrap_or_else(|| Err(io::Error::from(io::ErrorKind::BrokenPipe)))?;
+        self.last_activity = Some(Instant::now());
         let ResponseAdu {
             hdr: res_hdr,
             pdu: res_pdu,
@@ -203,8 +219,11 @@ mod tests {
     #[tokio::test]
     async fn handle_broadcast_no_response() {
         let transport = MockTransport;
-        let mut client =
-            crate::service::rtu::Client::new(transport, crate::service::rtu::Slave::broadcast());
+        let mut client = crate::service::rtu::Client::new(
+            transport,
+            crate::service::rtu::Slave::broadcast(),
+            std::time::Duration::ZERO,
+        );
         let res = client
             .call(crate::service::rtu::Request::ReadCoils(0x00, 5))
             .await;
