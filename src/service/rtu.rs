@@ -67,16 +67,13 @@ where
         let req_hdr = req_adu.hdr;
 
         // Enforce t3.5 inter-frame silence before sending
-        if let Some(last) = self.last_activity {
+        if let Some(last) = self.last_activity
+            && self.inter_frame_delay != Duration::ZERO
+        {
             let elapsed = last.elapsed();
             if elapsed < self.inter_frame_delay {
                 tokio::time::sleep(self.inter_frame_delay.saturating_sub(elapsed)).await;
             }
-        }
-
-        // Broadcast requests (slave ID 0) do not receive a response.
-        if Slave::from(req_hdr.slave_id).is_broadcast() {
-            return Ok(Ok(None));
         }
 
         let framed = self.framed()?;
@@ -84,11 +81,18 @@ where
         framed.send(req_adu).await?;
         self.last_activity = Some(Instant::now());
 
+        // Broadcast requests (slave ID 0) do not receive a response.
+        if Slave::from(req_hdr.slave_id).is_broadcast() {
+            return Ok(Ok(None));
+        }
+
+        let framed = self.framed()?;
         let res_adu = framed
             .next()
             .await
             .unwrap_or_else(|| Err(io::Error::from(io::ErrorKind::BrokenPipe)))?;
         self.last_activity = Some(Instant::now());
+
         let ResponseAdu {
             hdr: res_hdr,
             pdu: res_pdu,
